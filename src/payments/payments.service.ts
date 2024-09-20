@@ -1,14 +1,21 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { Stripe } from 'stripe';
 
 import * as config from '../config';
 import { CreatePaymentSessionDto } from './dto/create-payment-session.dto';
 import { isInstance } from 'class-validator';
 import { Request, Response } from 'express';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class PaymentsService {
   private readonly stripe = new Stripe(config.envs.STRIPE_SECRET_KEY);
+
+  constructor(
+    @Inject(config.NATS_SERVICE_NAME)
+    private natsClient: ClientProxy,
+  ) {}
+
   async createPaymentSession(createPaymentSessionDto: CreatePaymentSessionDto) {
     try {
       // console.log(createPaymentSessionDto);
@@ -39,26 +46,18 @@ export class PaymentsService {
         success_url: config.envs.STRIPE_SESSION_SUCCESS_URL,
         cancel_url: config.envs.STRIPE_SESSION_CANCEL_URL,
       });
-      return session;
+      return {
+        sessionUrl: session.url,
+        successUrl: session.success_url,
+        cancelUrl: session.cancel_url,
+      };
     } catch (err) {
-      // console.log(err.code);
-      // console.log(err.message);
-      // console.log(Object(err));
-
-      // console.log(err.code === 'StripeInvalidRequestError');
-      // console.log(err.type);
-      // console.log(err.param);
-      // console.log(err.statusCode);
-      console.log(err);
-
       if (err.type === 'StripeInvalidRequestError') {
         const itemIndex = err.param.match(/\[(\d+)\]/); // Tìm số bên trong []
         const errField = err.param.match(/\[([a-zA-Z_]+)\]/g); // Tìm tất cả các từ bên trong []
 
         const itemNumber = itemIndex ? itemIndex[1] : 'unknown'; // Lấy group 1 từ kết quả match
-        const field = errField
-          ? errField[errField.length - 1].replace(/\[|\]/g, '')
-          : 'unknown'; // Lấy field cuối cùng, loại bỏ dấu []
+        const field = errField ? errField[0].replace(/\[|\]/g, '') : 'unknown'; // Lấy field cuối cùng, loại bỏ dấu []
 
         const errMsg = `Error at item #${itemNumber}: ${field} is invalid`;
         throw new BadRequestException(errMsg);
@@ -71,7 +70,7 @@ export class PaymentsService {
     const sig = req.headers['stripe-signature'];
 
     let event: Stripe.Event;
-    let orderId: number;
+    let orderId: string;
 
     try {
       event = this.stripe.webhooks.constructEvent(
@@ -84,9 +83,18 @@ export class PaymentsService {
         case 'charge.succeeded':
           // HANDLE HERE ...
           // console.log(event);
-          const { metadata } = event.data.object;
-          orderId = +metadata?.orderId;
-          console.log(orderId);
+          const {
+            id: stripePaymentId,
+            metadata: { orderId },
+            receipt_url,
+          } = event.data.object;
+          // orderId = +metadata?.orderId;
+
+          this.natsClient.emit('charge.succeeded', {
+            stripePaymentId,
+            orderId: orderId,
+            receiptUrl: receipt_url,
+          });
 
           break;
         default:
