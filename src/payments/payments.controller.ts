@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import { CreatePaymentSessionDto } from './dto/create-payment-session.dto';
+import { CreatePaymentSessionDto } from './dtos/create-payment-session.dto';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 
 @Controller('payments')
@@ -8,12 +8,15 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   // @Post('create-payment-session')
-  @MessagePattern({ cmd: 'create.payment.session' })
-  createPaymentSession(@Payload() createPaymentSessionDto: any) {
-    return this.paymentsService.createPaymentSession({
-      ...createPaymentSessionDto,
-      metaData: { orderId: createPaymentSessionDto.orderId },
-    });
+  @MessagePattern('payments.createSession')
+  createPaymentSession(
+    @Payload() createPaymentSessionDto: CreatePaymentSessionDto,
+  ) {
+    // console.log('createPaymentSessionDto');
+    const { metadata, ...dto } = createPaymentSessionDto;
+    // return dto;
+
+    return this.paymentsService.createPaymentSession(dto);
   }
 
   @Get('success')
@@ -34,7 +37,7 @@ export class PaymentsController {
 
   @Post('webhook')
   stripeWebhook(@Req() req, @Res() res) {
-    console.log('stripeWebhook called');
+    // console.log('stripeWebhook called');
 
     return this.paymentsService.webhook(req, res);
   }
